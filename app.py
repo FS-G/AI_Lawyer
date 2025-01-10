@@ -11,6 +11,10 @@ from langchain.chains import RetrievalQA
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document  
 import pinecone
+from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
+from langchain_community.vectorstores import Pinecone
 
 
 # for the  code  file 
