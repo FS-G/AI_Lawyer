@@ -18,7 +18,7 @@ from langchain_community.vectorstores import Pinecone
 
 
 # for the  code  file 
-gemni_api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
 pine_api_key = os.getenv("PINECONE_API_KEY")
 os.environ['PINECONE_API_KEY'] = pine_api_key
 
