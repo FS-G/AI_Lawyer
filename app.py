@@ -13,45 +13,46 @@ from langchain_core.documents import Document
 
 
 # for the  code  file 
-gemni_api_key = os.getenv("GEMNI_API_KEY")
-api_key = os.getenv("PINECONE_API_KEY")
-os.environ['PINECONE_API_KEY'] = api_key
+gemni_api_key = os.getenv("OPENAI_API_KEY")
+pine_api_key = os.getenv("PINECONE_API_KEY")
+os.environ['PINECONE_API_KEY'] = pine_api_key
 
-# Define constants
+# Initialize Pinecone 
+pc = pinecone.Pinecone(api_key=pine_api_key, environment="us-east1-gcp")
+
+# Defining Constants
 namespace = "wondervector5000"
-index_name = "thesis"
-chunk_size = 1000
+index_name = "ai-rag"
 
-USERNAME = "shreyas"
-PASSWORD = "admin"
+# Loading embedding model storing cache
+@st.cache_resource
+def load_embeddings():
+    embedding_model = "BAAI/bge-base-en-v1.5"
+    return HuggingFaceEmbeddings(model_name=embedding_model)
 
-# Set up embeddings and vector store
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-docsearch = PineconeVectorStore.from_documents(
-    documents="", 
-    index_name=index_name, 
-    embedding=embeddings, 
-    namespace=namespace
-)
-time.sleep(1)
+# Instantiate language model 
+llm_gpt = ChatOpenAI(model="gpt-4", openai_api_key=openai_api_key)
 
-# Set up LLM and QA chain
-llm =  ChatGoogleGenerativeAI(
-    google_api_key = gemni_api_key,
-    model="gemini-1.5-pro",
-    temperature=0,
-    max_tokens=None,
-    timeout=None,
-    max_retries=2
-)
+# Initialize Pinecone Vector Store 
+@st.cache_resource
+def initialize_docsearch(_embeddings):
+    return Pinecone.from_documents(
+        documents=[],  # Empty initially, 
+        index_name=index_name,
+        embedding=embeddings,
+        namespace=namespace
+    )
 
-qa = RetrievalQA.from_chain_type(
-    llm=llm, 
-    chain_type="stuff", 
-    retriever=docsearch.as_retriever(search_kwargs={"k": 10})
-)
+# Initialize QA 
+@st.cache_resource
+def initialize_qa_system(_docsearch):
+    return RetrievalQA.from_chain_type(
+        llm=llm_gpt,
+        chain_type="stuff",
+        retriever=docsearch.as_retriever(search_kwargs={"k": 10})
+    )
 
-# Function to add background color
+# Defining function to add background color
 def add_bg_from_url():
     st.markdown(
         """
@@ -65,13 +66,11 @@ def add_bg_from_url():
         unsafe_allow_html=True
     )
 
-
-
 # Streamlit app settings
-st.set_page_config(page_title="AI Lawyer by shreyas", page_icon=":bar_chart:")
+st.set_page_config(page_title="AI Lawyer by Shreyas", page_icon=":bar_chart:")
 add_bg_from_url()
 
-# Session state for login, feedback, question, and visibility
+# Session state for login
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
@@ -81,64 +80,55 @@ if not st.session_state.logged_in:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if username == USERNAME and password == PASSWORD:
+        if username == "shreyas" and password == "admin":
             st.session_state.logged_in = True
             st.success("Login successful!")
-            st.rerun()
+            st.rerun()  # Refresh after login
         else:
             st.error("Invalid username or password")
 
-# Main app logic (after login)
+# Main app logic 
 else:
-    st.title("AI Lawyer by shreyas")
-
-    # Check if Pinecone database is empty
-
-    # Show file upload section only if the database is empty
-    st.write("Upload documents")
-    uploaded_file = st.file_uploader("Choose a file", type=["pdf"])
-    if uploaded_file:
-        if st.button("Submit the file"):
-            with st.spinner("Uploading and processing document..."):
-                with open("uploaded_pdf.pdf", "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                loader = PyPDFLoader("uploaded_pdf.pdf")
-                pages = loader.load_and_split()
-                text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=200)
-                documents = text_splitter.split_documents(pages)
-                docsearch = PineconeVectorStore.from_documents(
-                    documents=documents,
-                    index_name=index_name,
-                    embedding=embeddings,
-                    namespace=namespace,
-                )
-            st.success("Document uploaded and processed. You can now ask questions about its content.")
-
-
+    st.title("AI Lawyer by Shreyas")
+    
     # Question input and response
     question = st.text_input("Ask legal queries:")
     if st.button("Submit query"):
-        with st.spinner("Getting your answer from the AI Lawyer..."):
-            retrieved_docs = docsearch.as_retriever(search_kwargs={"k": 10}).get_relevant_documents(question)
+        if question:
+            with st.spinner("Getting your answer from the AI Lawyer..."):
+                embeddings = load_embeddings()  # Load embeddings 
+                docsearch = initialize_docsearch(embeddings)  # Initialize the vector store
+                qa = initialize_qa_system(docsearch)  # Initialize the QA system
+                
+                # Retrieving relevant documents from Pinecone
+                retrieved_docs = docsearch.as_retriever(search_kwargs={"k": 10}).get_relevant_documents(question)
+                context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+
             
-            context = "\n\n".join([doc.page_content for doc in retrieved_docs])
-            answer = qa.invoke(question)
-            st.subheader("Answer")
-            st.write(answer["result"])
-            st.subheader("Context")
-            st.write(context)
+                # Defining Customize the prompt with retrieved context and user question
+                custom_prompt = f"""
+                You are an AI lawyer specialized in legal documents. Your task is to provide a concise, well-reasoned answer to the legal question based on the provided context. Please do not rely on any information outside the context.
 
+                Context:
+                {context}
 
-        # Clear database button
-    if st.button("Clear the database"):
-        with st.spinner("Clearing the database..."):
-            try:
-                pc = Pinecone(api_key=api_key)
-                index = pc.Index(index_name)
-                index.delete(delete_all=True, namespace=namespace)
-                st.success("Database cleared!")
-            except:
-                st.error("The database is already empty.")
+                Question:
+                {question}
+
+                Answer:
+                Your answer should be based solely on the context provided above. If the answer is not explicitly covered in the context, clearly state that the information is insufficient. Avoid including any personal opinions or knowledge outside of the retrieved content.
+                """
+
+                
+                # Getting the answer from the QA system
+                answer = qa.run(custom_prompt)
+                
+                st.subheader("Answer")
+                st.write(answer)
+                # st.subheader("Context")
+                # st.write(context)
+        else:
+            st.error("Please enter a question.")
 
 
 
